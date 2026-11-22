@@ -1,0 +1,4 @@
+Shift + Ctrl + Q: Set fuel to 5 (test low-fuel alarm)
+Shift + Ctrl + W: Refill fuel to 300
+Shift + Ctrl + E: Add +3000 points to score
+Shift + Ctrl + R: Trigger level win
