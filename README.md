@@ -5,6 +5,28 @@ This port uses v3.0 of the game, specifically the egames.exe.
 You need either the original egames.exe or the assets.glom file for this to run.
 I haven't checked if it works with other versions.
 
+## Requirements & Setup (Linux)
+
+### 1. System Dependencies
+Install **SDL2**, **SDL2_mixer**, and a General MIDI **SoundFont** (for music):
+
+* **Ubuntu / Debian / Mint:**
+  ```bash
+  sudo apt install libsdl2-2.0-0 libsdl2-mixer-2.0-0 fluid-soundfont-gm
+  ```
+* **Arch Linux / SteamOS:**
+  ```bash
+  sudo pacman -S sdl2 sdl2_mixer soundfont-fluid
+  ```
+* **Fedora:**
+  ```bash
+  sudo dnf install SDL2 SDL2_mixer fluid-soundfont-gm
+  ```
+
+### 2. Game Data
+Copy your original `egames.exe` (or `assets.glom`) into the same folder as the `game` executable before launching.
+
+### 3. Compiling yourself
 You can compile using cmake:
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
