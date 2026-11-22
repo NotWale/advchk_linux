@@ -1,169 +1,275 @@
 #include "alien.hpp"
 #include "engine.hpp"
 #include "states.hpp"
+
 #include <algorithm>
+#include <cstdlib>
 
-int AlienRand(int mod) { return std::abs(std::rand()) % mod; }
+namespace {
 
-// Chase (sign = +1) or flee (sign = -1): each axis steps independently into free tiles.
-void AlienChaseOrFlee(AlienEntity& a, int sign, int interval) {
-    const int px = g_Game.tileX, py = g_Game.tileY;
-    int dx = 0, dy = 0;
-    if      (px > a.x) { if (FgAt(a.x + sign, a.y) == 0) dx =  sign; }
-    else if (px < a.x) { if (FgAt(a.x - sign, a.y) == 0) dx = -sign; }
-    if      (py > a.y) { if (FgAt(a.x, a.y + sign) == 0) dy =  sign; }
-    else if (py < a.y) { if (FgAt(a.x, a.y - sign) == 0) dy = -sign; }
+// ---- Map / rendering ------------------------------------------------------
+constexpr uint8_t kAlienMarker  = 0xfd;   // fg-map value that marks a live alien
+constexpr int kTilePx           = 16;
+constexpr int kViewTilesX       = 40;
+constexpr int kViewTilesY       = 31;
+constexpr int kSpriteYOffsetPx  = -8;
 
-    const int tx = a.x + dx, ty = a.y + dy;
-    a.interval = interval;
-    if ((tx == px && ty == py) || FgAt(tx, ty) != 0) {   // blocked (also when dx = dy = 0)
-        ++a.blocked;
+// ---- Sprite frames (Aliens.bmp columns) -----------------------------------
+constexpr int kLastWalkFrame    = 5;
+constexpr int kAttackFrame      = 6;
+constexpr int kStunnedFrame     = 7;
+constexpr int kFirstDyingFrame  = 8;
+constexpr int kLastDyingFrame   = 14;
+
+// ---- Behaviour tuning (frames per step) ----------------------------------
+constexpr int kChaseInterval    = 5;
+constexpr int kFleeInterval     = 2;
+constexpr int kSlowInterval     = 7;      // rest, wander, pattern, re-plan, dying
+constexpr int kStunnedInterval  = 15;
+
+constexpr int kRestAfterMoves       = 45;
+constexpr int kReplanAfterBlocked   = 20;
+constexpr int kAttackFuelDamage     = 50;
+
+// ---- Ship facing values owned by the ship code ----------------------------
+constexpr int kFacingFirstExplosion = 5;  // 5..13 = ship explosion
+constexpr int kFacingZapShimmer     = 15;
+
+// ---- Input ---------------------------------------------------------------
+constexpr int kVkH       = 0x48;
+constexpr int kVkNumpad8 = 0x68;
+
+// Pattern table: 4 patterns, stride 7, 8 steps each (so neighbours overlap by
+// one entry; the last entry is only read by pattern 3). Values index kDX/kDY
+// directly (0=down 1=right 2=up 3=left); 4 = stand still. Verified against the
+// original: jump table at 0x403bb0 and data at 0x421000.
+constexpr int     kPatternStride = 7;
+constexpr int     kPatternSteps  = 8;
+constexpr uint8_t kPatternMoves[] = {
+    1,2,2,3,3,3,4,   2,3,3,4,4,4,1,   3,4,4,1,1,1,2,   4,1,1,2,2,2,3,   0
+};
+constexpr uint8_t kNoMove = 4;
+
+struct TileOffset { int deltaX, deltaY; };
+// Where the ship sits relative to the alien for each AttackDir; the ship is
+// knocked back along the same vector.
+constexpr TileOffset kAttackOffsets[] = { {0, -1}, {1, 0}, {0, 1}, {-1, 0} };
+
+int  Sign(int value)                { return (value > 0) - (value < 0); }
+int  AlienRand(int upperBound)      { return std::rand() % upperBound; }
+bool OneIn(int chanceDenominator)   { return AlienRand(chanceDenominator) == 0; }
+
+bool IsHornActive() {
+    return g_SfxHorn.IsPlaying()
+        || (GetAsyncKeyState(kVkH)       & 0x8000)
+        || (GetAsyncKeyState(kVkNumpad8) & 0x8000);
+}
+
+// Keep the zap shimmer from interrupting a ship explosion.
+void ShowZapShimmer() {
+    if (g_Game.shipFacing < kFacingFirstExplosion) g_Game.shipFacing = kFacingZapShimmer;
+}
+
+void MoveTo(AlienEntity& alien, int targetX, int targetY) {
+    FgRef(alien.tileX, alien.tileY) = 0;
+    FgRef(targetX, targetY)         = kAlienMarker;
+    alien.tileX = targetX;
+    alien.tileY = targetY;
+}
+
+// ---- State handlers -------------------------------------------------------
+
+// Chase (direction = +1) or flee (direction = -1): each axis steps independently.
+void ChaseOrFlee(AlienEntity& alien, int direction, int interval) {
+    const int shipX = g_Game.tileX;
+    const int shipY = g_Game.tileY;
+
+    int deltaX = Sign(shipX - alien.tileX) * direction;
+    int deltaY = Sign(shipY - alien.tileY) * direction;
+    if (FgAt(alien.tileX + deltaX, alien.tileY) != 0) deltaX = 0;
+    if (FgAt(alien.tileX, alien.tileY + deltaY) != 0) deltaY = 0;
+
+    const int targetX = alien.tileX + deltaX;
+    const int targetY = alien.tileY + deltaY;
+    const bool targetIsShip = (targetX == shipX && targetY == shipY);
+
+    alien.interval = interval;
+    if (targetIsShip || FgAt(targetX, targetY) != 0) {   // also true when deltaX = deltaY = 0
+        ++alien.blocked;
         return;
     }
-    FgRef(tx, ty)     = 0xfd;
-    FgRef(a.x, a.y)   = 0;
-    a.x = tx; a.y = ty;
-    ++a.moves;
+    MoveTo(alien, targetX, targetY);
+    ++alien.moves;
 }
 
 // Wander and pattern steps never enter the ship's row or column.
-void AlienTryStep(AlienEntity& a, int dx, int dy) {
-    const int tx = a.x + dx, ty = a.y + dy;
-    if (FgAt(tx, ty) != 0) return;
-    if (ty == g_Game.tileY || tx == g_Game.tileX) return;
-    FgRef(a.x, a.y) = 0;
-    FgRef(tx, ty)   = 0xfd;
-    a.x = tx; a.y = ty;
+void TryStep(AlienEntity& alien, int deltaX, int deltaY) {
+    const int targetX = alien.tileX + deltaX;
+    const int targetY = alien.tileY + deltaY;
+    if (FgAt(targetX, targetY) != 0)                                return;
+    if (targetX == g_Game.tileX || targetY == g_Game.tileY)         return;
+    MoveTo(alien, targetX, targetY);
+}
+
+void Rest(AlienEntity& alien) {
+    alien.moves = 0;
+    ++alien.blocked;
+    alien.interval = kSlowInterval;
+}
+
+void Wander(AlienEntity& alien) {
+    const int direction = AlienRand(4);
+    TryStep(alien, kDX[direction], kDY[direction]);
+    if (OneIn(7)) alien.state = AlienState::Chase;
+    alien.interval = kSlowInterval;
+}
+
+void Attack(AlienEntity& alien) {
+    const int offsetIndex = static_cast<int>(alien.attackDir) - 1;
+    if (offsetIndex >= 0 && offsetIndex < 4) {
+        const TileOffset& knockback = kAttackOffsets[offsetIndex];
+        MovePlayerShip(knockback.deltaX, knockback.deltaY);
+    }
+
+    g_Game.fuel = std::max(0, g_Game.fuel - kAttackFuelDamage);
+    alien.frame = kAttackFrame;
+    SetPaletteEntry(1, 255, 0, 0);                  // red flash
+    g_SfxAlienhit.Play(0);
+    alien.attackDir = AttackDir::None;
+    alien.state     = AlienState::Flee;
+}
+
+void FollowPattern(AlienEntity& alien) {
+    if (alien.step == 0) alien.pattern = AlienRand(4);
+    const uint8_t move = kPatternMoves[alien.pattern * kPatternStride + alien.step];
+    if (move != kNoMove) TryStep(alien, kDX[move], kDY[move]);
+
+    if (++alien.step >= kPatternSteps) {
+        alien.step = alien.pattern = 0;
+        alien.state = AlienState::Chase;
+    }
+    alien.interval = kSlowInterval;
+}
+
+void Stunned(AlienEntity& alien) {
+    alien.frame    = kStunnedFrame;
+    alien.interval = kStunnedInterval;
+    if (OneIn(3)) alien.state = AlienState::Chase;
+}
+
+void Replan(AlienEntity& alien) {
+    alien.frame    = 0;
+    alien.interval = kSlowInterval;
+    alien.blocked  = alien.moves = 0;
+    switch (AlienRand(3)) {
+        case 0:  alien.state = AlienState::Wander;  break;
+        case 1:  alien.state = AlienState::Pattern; break;
+        default: alien.state = AlienState::Chase;   break;
+    }
+}
+
+void Dying(AlienEntity& alien) {
+    ShowZapShimmer();
+    alien.frame = std::max(alien.frame, kFirstDyingFrame);
+    if (alien.frame == kLastDyingFrame) {
+        if (g_Game.shipFacing == kFacingZapShimmer) g_Game.shipFacing = 0;   // original writes 0
+        ++g_Game.aliensDefeated;
+        FgRef(alien.tileX, alien.tileY) = 0;
+        alien.Remove();
+    }
+    alien.interval = kSlowInterval;
+}
+
+// ---- Per-frame update steps ----------------------------------------------
+
+// The fg-map marker decides life and death: a stunned alien whose marker was
+// overwritten (ship shorted it) starts dying; everyone else re-asserts it.
+void SyncMapMarker(AlienEntity& alien) {
+    uint8_t& marker = FgRef(alien.tileX, alien.tileY);
+    if (alien.state == AlienState::Stunned) {
+        if (marker == kAlienMarker) return;
+        alien.state = AlienState::Dying;
+        g_SfxBroken.Play(0);
+        ShowZapShimmer();
+    } else if (alien.state != AlienState::Dying) {
+        marker = kAlienMarker;
+    }
+}
+
+void RunState(AlienEntity& alien) {
+    switch (alien.state) {
+        case AlienState::Chase:   ChaseOrFlee(alien, +1, kChaseInterval); break;
+        case AlienState::Flee:    ChaseOrFlee(alien, -1, kFleeInterval);  break;
+        case AlienState::Rest:    Rest(alien);          break;
+        case AlienState::Wander:  Wander(alien);        break;
+        case AlienState::Attack:  Attack(alien);        break;
+        case AlienState::Pattern: FollowPattern(alien); break;
+        case AlienState::Stunned: Stunned(alien);       break;
+        case AlienState::Replan:  Replan(alien);        break;
+        case AlienState::Dying:   Dying(alien);         break;
+    }
+}
+
+// Start an attack if the ship is orthogonally adjacent (re-reads the ship
+// position: it may just have been pushed).
+void NoticeShip(AlienEntity& alien) {
+    if (alien.state == AlienState::Flee || alien.state == AlienState::Dying || g_Game.tubeDir != 0) return;
+
+    for (int offsetIndex = 0; offsetIndex < 4; ++offsetIndex) {
+        const TileOffset& offset = kAttackOffsets[offsetIndex];
+        if (alien.tileX + offset.deltaX == g_Game.tileX &&
+            alien.tileY + offset.deltaY == g_Game.tileY) {
+            alien.attackDir = static_cast<AttackDir>(offsetIndex + 1);
+            alien.state     = AlienState::Attack;
+            return;
+        }
+    }
+}
+
+void CheckCounters(AlienEntity& alien) {
+    if (alien.state == AlienState::Dying) return;
+    if (alien.moves   > kRestAfterMoves)     alien.state = AlienState::Rest;
+    if (alien.blocked > kReplanAfterBlocked) alien.state = AlienState::Replan;
+}
+
+void UpdateAlien(AlienEntity& alien) {
+    if (alien.IsRemoved()) return;
+
+    if (IsHornActive()) alien.state = AlienState::Stunned;
+    SyncMapMarker(alien);
+
+    if (++alien.tick < alien.interval) return;       // step gate
+    if (++alien.frame > kLastWalkFrame && alien.state != AlienState::Dying) alien.frame = 0;
+
+    RunState(alien);
+    NoticeShip(alien);
+    CheckCounters(alien);
+    alien.tick = 0;
+}
+
+bool IsOnScreen(const AlienEntity& alien, int cameraLeftTile, int cameraTopTile) {
+    return alien.tileX >= cameraLeftTile && alien.tileX < cameraLeftTile + kViewTilesX &&
+           alien.tileY >= cameraTopTile  && alien.tileY < cameraTopTile  + kViewTilesY;
+}
+
+} // namespace
+
+void UpdateAliens() {
+    for (AlienEntity& alien : g_Game.aliens) UpdateAlien(alien);
 }
 
 void DrawAliens(int cameraLeftTile, int cameraTopTile) {
     for (const AlienEntity& alien : g_Game.aliens) {
-        if (alien.x == -1 && alien.y == -1) continue;   // removed
-        if (alien.x < cameraLeftTile || alien.x >= cameraLeftTile + 40 ||
-            alien.y < cameraTopTile  || alien.y >= cameraTopTile  + 31) continue;
+        if (alien.IsRemoved() || !IsOnScreen(alien, cameraLeftTile, cameraTopTile)) continue;
         BlitTile(g_AliensBmp,
-                 (alien.x - cameraLeftTile) * 16,
-                 (alien.y - cameraTopTile)  * 16 - 8,
-                 alien.frame, 0, 0x8000);
+                 (alien.tileX - cameraLeftTile) * kTilePx,
+                 (alien.tileY - cameraTopTile)  * kTilePx + kSpriteYOffsetPx,
+                 alien.frame);
     }
 }
 
 // True if any alien occupies this tile, including a dying one whose marker is already erased.
 bool AlienStandsAt(int tileX, int tileY) {
-    for (const AlienEntity& alien : g_Game.aliens) {
-        if (alien.x == tileX && alien.y == tileY) return true;
-    }
-    return false;
+    return std::any_of(g_Game.aliens.begin(), g_Game.aliens.end(),
+        [&](const AlienEntity& alien) { return alien.tileX == tileX && alien.tileY == tileY; });
 }
-
-
-static void UpdateAlien(AlienEntity& a) {
-    if (FgRef(a.x, a.y) != 0xfd) {
-        std::printf("marker missing at (%d,%d), alien state=%d (6 = stunned)\n", a.x, a.y, a.state);
-    }
-    
-    if (a.x == -1 && a.y == -1) return;
-
-    // 1. The horn (sounding, or H / numpad 8 held) stuns every alien.
-    if (g_SfxHorn.IsPlaying() || (GetAsyncKeyState('H') & 0x8000) || (GetAsyncKeyState(0x68) & 0x8000))
-        a.state = ALIEN_STUNNED;
-
-    // 2. The map marker decides life and death.
-    uint8_t& marker = FgRef(a.x, a.y);
-    if (a.state == ALIEN_STUNNED) {
-        if (marker != 0xfd) {
-            a.state = ALIEN_DYING;
-            g_SfxBroken.Play(0);
-            if (g_Game.shipFacing < 5 || g_Game.shipFacing == 15) g_Game.shipFacing = 15;   // new line
-        }
-    } else if (marker != 0xfd && a.state != ALIEN_DYING) {
-        marker = 0xfd;
-    }
-
-    // 3. Step gate.
-    if (++a.tick < a.interval) return;
-    ++a.frame;
-    if (a.state != ALIEN_DYING && a.frame > 5) a.frame = 0;
-
-    switch (a.state) {
-    case ALIEN_CHASE: AlienChaseOrFlee(a, +1, 5); break;
-    case ALIEN_FLEE:  AlienChaseOrFlee(a, -1, 2); break;
-
-    case ALIEN_REST:
-        a.moves = 0; ++a.blocked; a.interval = 7;
-        break;
-
-    case ALIEN_WANDER: {
-        const int r = AlienRand(4);
-        AlienTryStep(a, kDX[r], kDY[r]);
-        if (AlienRand(7) == 0) a.state = ALIEN_CHASE;
-        a.interval = 7;
-        break; }
-
-    case ALIEN_ATTACK: {
-        static const int pushDX[5] = { 0, 0, 1, 0, -1 }; // indexed by attackDir
-        static const int pushDY[5] = { 0, -1, 0, 1, 0 };
-        if (a.attackDir >= 1 && a.attackDir <= 4)
-            MovePlayerShip(pushDX[a.attackDir], pushDY[a.attackDir]); // knock the ship away
-        g_Game.fuel = std::max(0, g_Game.fuel - 50);
-        a.frame = 6;
-        SetPaletteEntry(1, 255, 0, 0); // red flash
-        g_SfxAlienhit.Play(0);
-        a.attackDir = 0;
-        a.state = ALIEN_FLEE;
-        break; }
-
-    case ALIEN_PATTERN: {
-        // Original quirk kept: values 1..4 index handlers 0..3, so 4 = no move and 0 = down.
-        static const int kPattern[29] = { 1,2,2,3,3,3,4,  2,3,3,4,4,4,1,
-                                          3,4,4,1,1,1,2,  4,1,1,2,2,2,3,  0 };
-        if (a.step == 0) a.pattern = AlienRand(4);
-        const int v = kPattern[a.pattern * 7 + a.step];
-        if (v <= 3) AlienTryStep(a, kDX[v], kDY[v]);
-        if (++a.step > 7) { a.step = 0; a.pattern = 0; a.state = ALIEN_CHASE; }
-        a.interval = 7;
-        break; }
-
-    case ALIEN_STUNNED:
-        a.frame = 7; a.interval = 15;
-        if (AlienRand(3) == 0) a.state = ALIEN_CHASE;
-        break;
-
-    case ALIEN_REPLAN:
-        a.frame = 0; a.interval = 7; a.blocked = 0; a.moves = 0;
-        switch (AlienRand(3)) {
-            case 0:  a.state = ALIEN_WANDER;  break;
-            case 1:  a.state = ALIEN_PATTERN; break;
-            default: a.state = ALIEN_CHASE;   break;
-        }
-        break;
-
-    case ALIEN_DYING:
-        // Don't interrupt a ship explosion (facing 5..13) with the zap shimmer.
-        if (g_Game.shipFacing < 5 || g_Game.shipFacing == 15) g_Game.shipFacing = 15;
-        if (a.frame < 8) a.frame = 8;
-        if (a.frame == 14) {
-            if (g_Game.shipFacing == 15) g_Game.shipFacing = 0;   // the original writes 0 here
-            ++g_Game.aliensDefeated;
-            FgRef(a.x, a.y) = 0;
-            a.x = a.y = -1;
-        }
-        a.interval = 7;
-        break;
-    }
-
-    // Shared tail: notice the ship, then check the rest/re-plan counters.
-    if (a.state != ALIEN_FLEE && a.state != ALIEN_DYING && g_Game.tubeDir == 0) {
-        const int px = g_Game.tileX, py = g_Game.tileY;   // re-read: the ship may just have been pushed
-        if      (a.y - 1 == py && a.x == px) { a.attackDir = 1; a.state = ALIEN_ATTACK; }
-        else if (a.y == py && a.x + 1 == px) { a.attackDir = 2; a.state = ALIEN_ATTACK; }
-        else if (a.y + 1 == py && a.x == px) { a.attackDir = 3; a.state = ALIEN_ATTACK; }
-        else if (a.y == py && a.x - 1 == px) { a.attackDir = 4; a.state = ALIEN_ATTACK; }
-    }
-    if (a.moves   > 45 && a.state != ALIEN_DYING) a.state = ALIEN_REST;
-    if (a.blocked > 20 && a.state != ALIEN_DYING) a.state = ALIEN_REPLAN;
-    a.tick = 0;
-}
-
-void UpdateAliens() { for (AlienEntity& a : g_Game.aliens) UpdateAlien(a); }
-

@@ -383,8 +383,8 @@ static void LoadLevelFromGlom() {
                     g_Game.reactorY = ty;
                 } else if (tileVal == 0xfd) { // Alien spawn
                     AlienEntity alien;
-                    alien.x = tx;
-                    alien.y = ty;
+                    alien.tileX = tx;
+                    alien.tileY = ty;
                     g_Game.aliens.push_back(alien);
                     g_Game.totalAliens++;
                 } else if (tileVal == 0xfe) { // Chicken spawn
