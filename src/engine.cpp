@@ -165,7 +165,7 @@ bool LoadGlomFromFile(const std::string& path, size_t baseOffset, size_t blobSiz
     return true;
 }
 
-}  // namespace
+}
 
 bool GetGlomEntryBytes(const std::string& filename, std::vector<uint8_t>& outBytes) {
     const GlomView entry = FindGlomEntry(filename);
@@ -228,7 +228,7 @@ SDL_Scancode VkToScancode(int virtualKey) {
     }
 }
 
-}  // namespace
+}
 
 uint32_t timeGetTime() { return SDL_GetTicks(); }
 
@@ -268,9 +268,7 @@ char GetTypedChar() {
     return (typed == ',' || typed == '+') ? '\0' : typed;
 }
 
-// ==============================================================================
 // Software renderer: 8-bit palettized back buffer
-// ==============================================================================
 
 namespace {
 
@@ -369,10 +367,9 @@ int WrapIntoRange(int value, int range) {
     return wrapped < 0 ? wrapped + range : wrapped;
 }
 
-}  // namespace
+}
 
-SpriteSheet LoadSpriteSheet(const std::string& filename, int tileWidth, int tileHeight,
-                            bool /*hasColorKey*/) {
+SpriteSheet LoadSpriteSheet(const std::string& filename, int tileWidth, int tileHeight) {
     SpriteSheet sheet;
     sheet.filename = filename;
 
@@ -505,7 +502,7 @@ void DrawStarfield(int cameraX, int cameraY, bool autoScroll) {
     }
 }
 
-// ---- Palette effects --------------------------------------------------------
+// Palette effects
 
 void SetPaletteEntry(int index, uint8_t red, uint8_t green, uint8_t blue) {
     if (!g_Screen8Bit) return;
@@ -587,9 +584,7 @@ void FadeOutToBlack(int seconds) {
     SDL_SetPaletteColors(palette, originalPalette.data(), 0, kScreenPaletteSize);
 }
 
-// ==============================================================================
 // MIDI music: Microsoft MIDS (.mds) -> standard MIDI -> TinySoundFont
-// ==============================================================================
 
 namespace {
 
@@ -818,7 +813,7 @@ void TinySynthAudioCallback(void* /*userData*/, uint8_t* stream, int byteCount) 
     }
 }
 
-}  // namespace
+}
 
 void PlayMidiMusic(const std::string& mdsFilename, bool loop) {
     if (!g_MusicEnabled || !g_Midi.synth) return;
@@ -868,9 +863,7 @@ void StopMidiMusic() {
     if (previousSong) tml_free(previousSong);
 }
 
-// ==============================================================================
 // Sound effects
-// ==============================================================================
 
 namespace {
 
@@ -883,7 +876,7 @@ Mix_Chunk* LoadWavAsset(const std::string& filename) {
     return Mix_LoadWAV_RW(SDL_RWFromConstMem(entry.data, static_cast<int>(entry.size)), 1);
 }
 
-}  // namespace
+}
 
 bool SoundEffect::IsPlaying() const {
     return channel != -1 && Mix_Playing(channel) != 0;
@@ -918,9 +911,7 @@ void SoundEffect::Free() {
 
 bool IsAnySoundPlaying() { return Mix_Playing(-1) > 0; }
 
-// ==============================================================================
 // Player data (Chickens.ini)
-// ==============================================================================
 
 namespace {
 
@@ -1002,7 +993,7 @@ void ParseSettingLine(const char* line) {
 
 const char* YesNo(bool value) { return value ? "Yes" : "No"; }
 
-}  // namespace
+}
 
 void SavePlayerData() {
     std::ofstream file(kSettingsFile);
@@ -1032,9 +1023,7 @@ void LoadPlayerData() {
     }
 }
 
-// ==============================================================================
 // Errors and game state
-// ==============================================================================
 
 void SetFatalError(const std::string& message) { g_FatalErrorMessage = message; }
 
@@ -1054,9 +1043,7 @@ int SetOrGetGameState(int newState) {
     return (newState == kQueryPreviousState) ? g_PreviousState : g_CurrentState;
 }
 
-// ==============================================================================
 // Engine lifecycle
-// ==============================================================================
 
 namespace {
 
@@ -1151,7 +1138,7 @@ bool InitVideo(const char* windowTitle, int width, int height) {
     return g_Screen8Bit && g_Screen32Bit && g_ScreenTexture;
 }
 
-}  // namespace
+}
 
 bool InitEngine(const char* windowTitle, int width, int height) {
     if (!LoadAssetArchive()) {

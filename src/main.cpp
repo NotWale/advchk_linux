@@ -1,85 +1,62 @@
-#include <SDL2/SDL.h>
 #include "engine.hpp"
+#include "game_assets.hpp"
 #include "states.hpp"
 
+#include <SDL2/SDL.h>
+
+namespace {
+
+constexpr uint32_t kFrameTimeMs = 33;   // ~30 FPS (the original spins; SDL_Delay keeps the CPU idle)
+constexpr uint32_t kInactiveDelayMs = 16;
+
 bool InitApp() {
-    if (!InitEngine("AdvChk", 640, 480)) {
-        return false;
-    }
-    InitMenuAndSharedAssets();
-    SetOrGetGameState(0); // Launch into StateSplash
+    if (!InitEngine("AdvChk", 640, 480)) return false;
+    LoadGameAssets();
+    SetOrGetGameState(kStateSplash);
     return !CheckForPendingError();
 }
 
-// Replaces RunFrame (00404c90)
-int RunFrame() {
+// Runs the state handler for the current game state. Returns false to quit (RunFrame, 00404c90).
+bool RunFrame() {
     if (!IsWindowActive()) {
-        SDL_Delay(16);
-        return 1;
+        SDL_Delay(kInactiveDelayMs);
+        return true;
     }
 
-    uint32_t frameStart = timeGetTime();
+    const uint32_t frameStart = timeGetTime();
 
-    int state = SetOrGetGameState(-1);
-    switch (state) {
-        case 0:
-            StateSplash();
-            break;
-        case 1:
-            State_MainMenu();
-            break;
-        case 2:
-            State_PlayerProfile();
-            break;
-        case 3:
-            State_MainGame();
-            break;
-        case 4:
-            SetOrGetGameState(-1);
-            break;
-        case 5:
-            State_Credits();
-            break;
-        case 6:
-            State_Instructions();
-            break;
-        case 7: // State_Exiting
-            return 0;
-        case 8:
-            State_LevelSummary();
-            break;
-        case 9:
-            State_Options();
-            break;
-        case 10:
-            State_Ending();
-            break;
+    switch (SetOrGetGameState(kQueryCurrentState)) {
+        case kStateSplash:           State_Splash();        break;
+        case kStateMainMenu:         State_MainMenu();      break;
+        case kStatePlayerProfile:    State_PlayerProfile(); break;
+        case kStateMainGame:         State_MainGame();      break;
+        case kStateReturnToPrevious: break;                 // handled by the states themselves
+        case kStateCredits:          State_Credits();       break;
+        case kStateInstructions:     State_Instructions();  break;
+        case kStateExiting:          return false;
+        case kStateLevelSummary:     State_LevelSummary();  break;
+        case kStateOptions:          State_Options();       break;
+        case kStateEnding:           State_Ending();        break;
         default:
             ClearScreen(0);
             FlipScreen();
             break;
     }
 
-    // ~30 FPS cap (33ms = 0x21ms, using SDL_Delay instead of a CPU-burning spin loop)
-    uint32_t elapsed = timeGetTime() - frameStart;
-    if (elapsed < 33) {
-        SDL_Delay(33 - elapsed);
-    }
+    const uint32_t elapsed = timeGetTime() - frameStart;
+    if (elapsed < kFrameTimeMs) SDL_Delay(kFrameTimeMs - elapsed);
 
-    return CheckForPendingError() ? 0 : 1;
+    return !CheckForPendingError();
 }
 
-// Replaces WinMain (0040b810)
-int main(int argc, char* argv[]) {
+}  
+
+// Replaces WinMain (0040b810).
+int main(int /*argc*/, char* /*argv*/[]) {
     if (InitApp()) {
-        int keepRunning = ProcessMessages();
-        while (keepRunning != 0 && RunFrame() != 0) {
-            keepRunning = ProcessMessages();
-        }
+        while (ProcessMessages() && RunFrame()) {}
     }
-    if (CheckForPendingError()) {
-        ShowFatalErrorDialog();
-    }
+    if (CheckForPendingError()) ShowFatalErrorDialog();
     ShutdownEngine();
     return 0;
 }

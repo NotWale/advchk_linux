@@ -162,7 +162,7 @@ TMLDEF tml_message* tml_load_tsf_stream(struct tsf_stream* stream);
 #endif
 
 // end header
-// ---------------------------------------------------------------------------------------------------------
+//  ----------------------------------------
 #endif //TML_INCLUDE_TML_INL
 
 #ifdef TML_IMPLEMENTATION

@@ -250,7 +250,7 @@ TSFDEF float tsf_channel_get_tuning(tsf* f, int channel);
 #endif
 
 // end header
-// ---------------------------------------------------------------------------------------------------------
+//  ----------------------------------------
 #endif //TSF_INCLUDE_TSF_INL
 
 #ifdef TSF_IMPLEMENTATION
