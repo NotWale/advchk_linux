@@ -1,6 +1,7 @@
 Modern (Arch) Linux Port of Adventures with Chickens
 
-A linux port of the classic (and basically unknown) game "Adventures with Chickens".
+A Decompilation Linux port of the classic (and basically unknown) game "Adventures with Chickens".
+With the help from Claude.
 This port uses v3.0 of the game, specifically the egames.exe.
 You need either the original egames.exe or the assets.glom file for this to run.
 I haven't checked if it works with other versions.
